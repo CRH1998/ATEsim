@@ -1,0 +1,594 @@
+---
+title: "Simulating clustered competing risks data"
+date: "r Sys.Date()"
+output:
+  html_document:
+    toc: true
+---
+
+The task is to simulate data from the simul.cifs function in the mets package. We simulate data twice but in each simulation we use the same covariate z whereas the other covariates will be simulated independently. We then put the two simulations together and add an id column to indicate which individuals share the z covariate. 
+
+Next, we use the binregATE function to estimate the average treatment effect of a binary covariate X1 on the cumulative incidence function of cause 1. We do this for four different models and compare the estimates.
+
+
+```{r}
+# Loading relevant packages
+library(mets)
+library(readr)
+library(ggplot2)
+source("helperfuncs.R")
+source("summarizeSims.R")
+```
+
+
+
+```{r}
+# Simulate data
+set.seed(02092025)
+
+n <- 800
+
+# Define parameters for baseline hazard
+rho1 <- 0.4
+rho2 <- 2
+
+# Define beta parameters
+beta <- c(1,0.3,-0.3,1,-0.3,0.3)
+
+
+# Simulate correlation variable
+varz <- 1
+z <- rgamma(n,shape=1/varz)*varz
+
+
+# Simulate all covariates twice and store in matrix Z1 and Z2 - reusing z for correlation
+Z1 <- cbind(log(z), as.factor(rbinom(n,1,0.5)), as.factor(rbinom(n,1,0.5)))
+Z2 <- cbind(log(z), as.factor(rbinom(n,1,0.5)), as.factor(rbinom(n,1,0.5)))
+
+
+# Simulate outcomes using simul.cifs
+dats1 <- simul.cifs(n,                  # Number of individuals
+                    rho1,               # Baseline hazard parameter for cause 1
+                    rho2,               # Baseline hazard parameter for cause 2
+                    beta,               # Coefficients for covariates
+                    rc = 0,             # Hazard for gamma distributed censoring
+                    depcens = 0,        # Independent censoring
+                    type = "cloglog",   # Simulate outcomes from a Fine-Gray model
+                    Z = Z1)             # Covariates for simulation
+                    
+
+dats2 <- simul.cifs(n, rho1, rho2, beta, rc = 0, depcens = 0, type = "cloglog", Z = Z2)
+
+# Combine datasets and add id column
+dats1$id <- 1:n
+dats2$id <- 1:n
+dats <- rbind(dats1,dats2)
+
+dats$Z2 <- as.factor(dats$Z2)
+dats$Z3 <- as.factor(dats$Z3)
+
+
+# With specified cens.model but no cluster(id)
+bATEt1.1 <- binregATE(Event(time,status) ~ Z2 + Z3, data = dats, model = "logit",
+                      treat.model = Z2 ~ Z3,
+                      cens.model = ~ strata(Z2, Z3), 
+                      time = c(4), cause = 1)
+
+# With specified cens.model and cluster(id)
+bATEt1.2 <- binregATE(Event(time,status) ~ Z2 + Z3 + cluster(id), data = dats, model = "logit",
+                      treat.model = Z2 ~ Z3,
+                      cens.model = ~ strata(Z2, Z3), 
+                      time = c(4), cause = 1)
+
+
+# Without specified cens.model and without cluster(id)
+bATEt2.1 <- binregATE(Event(time,status) ~ Z2 + Z3,data = dats, model = "logit",
+                      treat.model = Z2 ~ Z3,
+                      time = c(4), cause = 1)
+
+
+# Without specified cens.model but with cluster(id)
+bATEt2.2 <- binregATE(Event(time,status) ~ Z2 + Z3 + cluster(id), data = dats, model = "logit",
+                      treat.model = Z2 ~ Z3,
+                      time = c(4), cause = 1)
+
+
+atemodels <- list("1.1" = bATEt1.1, "1.2" = bATEt1.2, "2.1" = bATEt2.1, "2.2" = bATEt2.2)
+
+
+#-------------------------------Extract estimates-----------------------------
+atemodelests <- lapply(atemodels, extract_binregATE_coef)
+```
+
+
+Having defined the dataset with correlated outcomes based on the the z covariate we can use the binregATE function to estimate the average treatment effect of the binary covariate X1 on the cumulative incidence function of cause 1. We will do this for four different models:
+
+
+```{r}
+#runone(n = 800, seed = 123, cluster_size = 2)
+```
+
+
+
+
+The true parameters has been estimated using a very large dataset and saved in a csv file which is loaded in the following chunk:
+
+```{r}
+summary_df <- read_delim("TrueParamSimpleSim.csv", delim = ";", escape_double = FALSE, col_types = cols(...3 = col_skip()), trim_ws = TRUE)
+
+# Extract true parameters
+true_treat0 <- summary_df$mean[7]
+true_treat1 <- summary_df$mean[8]
+true_treat01 <- summary_df$mean[9]
+```
+We then run the runone simulation function multiple times and store the results in a list which is then flattened to a data frame using the flatten_sims function from the helperfuncs.R script.
+
+```{r}
+n_sim <- 10
+estimates <- replicate(n_sim, 
+                       runone(n = 800, 
+                              seed = NA, 
+                              correlation = T, 
+                              cluster_size = 2,
+                              varZ_corr = 1, 
+                              varZ_corr_cens = 1,
+                              rcZ = 1,
+                              specs = list(
+                                Z1 = list(dist = rbinom, size = 1, prob = 0.5), 
+                                Z2 = list(dist = rbinom, size = 1, prob = 0.5)),
+                                #Z3 = list(dist = rnorm, mean = 1, sd = 1)), 
+                              rho1 = 0.4, 
+                              rho2 = 2, 
+                              beta = c(1, 0.3, -0.3, 1, -0.3, 0.3), 
+                              rc = 0.5, 
+                              depcens = 1, 
+                              sim_type = "cloglog"), 
+                       simplify = FALSE)
+
+sim_ests <- flatten_sims(estimates)
+#write.csv(sim_ests, file = "SimEstsSimpleSim.csv", row.names = TRUE)
+#sim_ests <- read_delim("SimEstsSimpleSim.csv", delim = ",", escape_double = FALSE, trim_ws = TRUE)
+```
+
+
+```{r}
+head(sim_ests)
+```
+
+
+```{r}
+ate_truths <- c(`treat0` = true_treat0, `treat1` = true_treat1, `treat:1-0` = true_treat01)
+res_ate <- summarize_sim_ATE(sim_ests, truths = ate_truths)
+res_ate$summary
+```
+
+
+```{r}
+coef_truths <- c(Intercept = -1, Z21 = 0.3, Z31 = -0.3)
+res_coef <- summarize_sim_coefs(sim_ests, truths = coef_truths)
+res_coef$summary
+```
+
+
+
+```{r}
+# Estimates
+ATEests_1_1_G_est_treat0 <- sim_ests$ATEests_1_1_G_est_treat0
+ATEests_1_1_G_est_treat1 <- sim_ests$ATEests_1_1_G_est_treat1
+ATEests_1_1_G_est_treat10 <- sim_ests$`ATEests_1_1_G_est_treat:1-0`
+
+
+# Standard errors
+ATEests_1_1_G_se_treat0 <- sim_ests$ATEests_1_1_G_se_treat0
+ATEests_1_1_G_se_treat1 <- sim_ests$ATEests_1_1_G_se_treat1
+ATEests_1_1_G_se_treat10 <- sim_ests$`ATEests_1_1_G_se_treat:1-0`
+
+
+# Cofidence intervals
+ATEests_1_1_G_se_treat0_LCI <- ATEests_1_1_G_est_treat0 - 1.96 * ATEests_1_1_G_se_treat0
+ATEests_1_1_G_se_treat0_UCI <- ATEests_1_1_G_est_treat0 + 1.96 * ATEests_1_1_G_se_treat0
+
+ATEests_1_1_G_se_treat1_LCI <- ATEests_1_1_G_est_treat1 - 1.96 * ATEests_1_1_G_se_treat1
+ATEests_1_1_G_se_treat1_UCI <- ATEests_1_1_G_est_treat1 + 1.96 * ATEests_1_1_G_se_treat1
+
+ATEests_1_1_G_se_treat10_LCI <- ATEests_1_1_G_est_treat10 - 1.96 * ATEests_1_1_G_se_treat10
+ATEests_1_1_G_se_treat10_UCI <- ATEests_1_1_G_est_treat10 + 1.96 * ATEests_1_1_G_se_treat10
+
+
+
+# Coverage
+ATEests_1_1_G_cov_treat0 <- mean((ATEests_1_1_G_se_treat0_LCI < true_treat0) & (ATEests_1_1_G_se_treat0_UCI > true_treat0))
+ATEests_1_1_G_cov_treat1 <- mean((ATEests_1_1_G_se_treat1_LCI < true_treat1) & (ATEests_1_1_G_se_treat1_UCI > true_treat1))
+ATEests_1_1_G_cov_treat10 <- mean((ATEests_1_1_G_se_treat10_LCI < true_treat01) & (ATEests_1_1_G_se_treat10_UCI > true_treat01))
+
+
+# Mean and sd of estimates and standard errors
+mean_ATEests_1_1_G_est_treat0 <- mean(ATEests_1_1_G_est_treat0)
+mean_ATEests_1_1_G_est_treat1 <- mean(ATEests_1_1_G_est_treat1)
+mean_ATEests_1_1_G_est_treat10 <- mean(ATEests_1_1_G_est_treat10)
+
+sd_ATEests_1_1_G_est_treat0 <- sd(ATEests_1_1_G_est_treat0)
+sd_ATEests_1_1_G_est_treat1 <- sd(ATEests_1_1_G_est_treat1)
+sd_ATEests_1_1_G_est_treat10 <- sd(ATEests_1_1_G_est_treat10)
+
+
+mean_ATEests_1_1_G_se_treat0 <- mean(ATEests_1_1_G_se_treat0)
+mean_ATEests_1_1_G_se_treat1 <- mean(ATEests_1_1_G_se_treat1)
+mean_ATEests_1_1_G_se_treat10 <- mean(ATEests_1_1_G_se_treat10)
+```
+
+
+```{r}
+data.frame("MeanEst" = c(mean_ATEests_1_1_G_est_treat0, mean_ATEests_1_1_G_est_treat1, mean_ATEests_1_1_G_est_treat10),
+           "SD" = c(sd_ATEests_1_1_G_est_treat0, sd_ATEests_1_1_G_est_treat1, sd_ATEests_1_1_G_est_treat10),
+           "MeanSE" = c(mean_ATEests_1_1_G_se_treat0, mean_ATEests_1_1_G_se_treat1, mean_ATEests_1_1_G_se_treat10),
+           "Coverage" = c(ATEests_1_1_G_cov_treat0, ATEests_1_1_G_cov_treat1, ATEests_1_1_G_cov_treat10),
+           row.names = c("treat0", "treat1", "treat:1-0"))
+```
+
+```{r}
+ggplot(data = data.frame(ATE_1_1_G_est = ATEests_1_1_G_est_treat10), aes(x = ATE_1_1_G_est)) +
+  geom_histogram(fill = "gray", color = "black", bins = 20) +
+  geom_vline(xintercept = true_treat01, color = "red", lwd = 1) +
+  labs(title = "Estimates ATE, model with large censoring model but no id column",
+       x = "Estimate of ATE",
+       y = "Frequency") +
+  theme_bw()
+```
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+# Estimates
+ATEests_1_1_DR_est_treat0 <- sim_ests$ATEests_1_1_DR_est_treat0
+ATEests_1_1_DR_est_treat1 <- sim_ests$ATEests_1_1_DR_est_treat1
+ATEests_1_1_DR_est_treat10 <- sim_ests$`ATEests_1_1_DR_est_treat:1-0`
+
+
+# Standard errors
+ATEests_1_1_DR_se_treat0 <- sim_ests$ATEests_1_1_DR_se_treat0
+ATEests_1_1_DR_se_treat1 <- sim_ests$ATEests_1_1_DR_se_treat1
+ATEests_1_1_DR_se_treat10 <- sim_ests$`ATEests_1_1_DR_se_treat:1-0`
+
+
+# Cofidence intervals
+ATEests_1_1_DR_se_treat0_LCI <- ATEests_1_1_DR_est_treat0 - 1.96 * ATEests_1_1_DR_se_treat0
+ATEests_1_1_DR_se_treat0_UCI <- ATEests_1_1_DR_est_treat0 + 1.96 * ATEests_1_1_DR_se_treat0
+
+ATEests_1_1_DR_se_treat1_LCI <- ATEests_1_1_DR_est_treat1 - 1.96 * ATEests_1_1_DR_se_treat1
+ATEests_1_1_DR_se_treat1_UCI <- ATEests_1_1_DR_est_treat1 + 1.96 * ATEests_1_1_DR_se_treat1
+
+ATEests_1_1_DR_se_treat10_LCI <- ATEests_1_1_DR_est_treat10 - 1.96 * ATEests_1_1_DR_se_treat10
+ATEests_1_1_DR_se_treat10_UCI <- ATEests_1_1_DR_est_treat10 + 1.96 * ATEests_1_1_DR_se_treat10
+
+
+
+# Coverage
+ATEests_1_1_DR_cov_treat0 <- mean((ATEests_1_1_DR_se_treat0_LCI < true_treat0) & (ATEests_1_1_DR_se_treat0_UCI > true_treat0))
+ATEests_1_1_DR_cov_treat1 <- mean((ATEests_1_1_DR_se_treat1_LCI < true_treat1) & (ATEests_1_1_DR_se_treat1_UCI > true_treat1))
+ATEests_1_1_DR_cov_treat10 <- mean((ATEests_1_1_DR_se_treat10_LCI < true_treat01) & (ATEests_1_1_DR_se_treat10_UCI > true_treat01))
+
+
+# Mean and sd of estimates and standard errors
+mean_ATEests_1_1_DR_est_treat0 <- mean(ATEests_1_1_DR_est_treat0)
+mean_ATEests_1_1_DR_est_treat1 <- mean(ATEests_1_1_DR_est_treat1)
+mean_ATEests_1_1_DR_est_treat10 <- mean(ATEests_1_1_DR_est_treat10)
+
+sd_ATEests_1_1_DR_est_treat0 <- sd(ATEests_1_1_DR_est_treat0)
+sd_ATEests_1_1_DR_est_treat1 <- sd(ATEests_1_1_DR_est_treat1)
+sd_ATEests_1_1_DR_est_treat10 <- sd(ATEests_1_1_DR_est_treat10)
+
+
+mean_ATEests_1_1_DR_se_treat0 <- mean(ATEests_1_1_DR_se_treat0)
+mean_ATEests_1_1_DR_se_treat1 <- mean(ATEests_1_1_DR_se_treat1)
+mean_ATEests_1_1_DR_se_treat10 <- mean(ATEests_1_1_DR_se_treat10)
+```
+
+
+```{r}
+data.frame("MeanEst" = c(mean_ATEests_1_1_DR_est_treat0, mean_ATEests_1_1_DR_est_treat1, mean_ATEests_1_1_DR_est_treat10),
+           "SD" = c(sd_ATEests_1_1_DR_est_treat0, sd_ATEests_1_1_DR_est_treat1, sd_ATEests_1_1_DR_est_treat10),
+           "MeanSE" = c(mean_ATEests_1_1_DR_se_treat0, mean_ATEests_1_1_DR_se_treat1, mean_ATEests_1_1_DR_se_treat10),
+           "Coverage" = c(ATEests_1_1_DR_cov_treat0, ATEests_1_1_DR_cov_treat1, ATEests_1_1_DR_cov_treat10),
+           row.names = c("treat0", "treat1", "treat:1-0"))
+```
+
+
+```{r}
+ggplot(data = data.frame(ATE_1_1_DR_est = ATEests_1_1_DR_est_treat10), aes(x = ATE_1_1_DR_est)) +
+  geom_histogram(fill = "gray", color = "black", bins = 20) +
+  geom_vline(xintercept = true_treat01, color = "red", lwd = 1) +
+  labs(title = "Estimates ATE, model with large censoring model but no id column",
+       x = "Estimate of ATE",
+       y = "Frequency") +
+  theme_bw()
+```
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+# Estimates
+ATEests_1_2_G_est_treat0 <- sim_ests$ATEests_1_2_G_est_treat0
+ATEests_1_2_G_est_treat1 <- sim_ests$ATEests_1_2_G_est_treat1
+ATEests_1_2_G_est_treat10 <- sim_ests$`ATEests_1_2_G_est_treat:1-0`
+
+
+# Standard errors
+ATEests_1_2_G_se_treat0 <- sim_ests$ATEests_1_2_G_se_treat0
+ATEests_1_2_G_se_treat1 <- sim_ests$ATEests_1_2_G_se_treat1
+ATEests_1_2_G_se_treat10 <- sim_ests$`ATEests_1_2_G_se_treat:1-0`
+
+
+# Cofidence intervals
+ATEests_1_2_G_se_treat0_LCI <- ATEests_1_2_G_est_treat0 - 1.96 * ATEests_1_2_G_se_treat0
+ATEests_1_2_G_se_treat0_UCI <- ATEests_1_2_G_est_treat0 + 1.96 * ATEests_1_2_G_se_treat0
+
+ATEests_1_2_G_se_treat1_LCI <- ATEests_1_2_G_est_treat1 - 1.96 * ATEests_1_2_G_se_treat1
+ATEests_1_2_G_se_treat1_UCI <- ATEests_1_2_G_est_treat1 + 1.96 * ATEests_1_2_G_se_treat1
+
+ATEests_1_2_G_se_treat10_LCI <- ATEests_1_2_G_est_treat10 - 1.96 * ATEests_1_2_G_se_treat10
+ATEests_1_2_G_se_treat10_UCI <- ATEests_1_2_G_est_treat10 + 1.96 * ATEests_1_2_G_se_treat10
+
+
+
+# Coverage
+ATEests_1_2_G_cov_treat0 <- mean((ATEests_1_2_G_se_treat0_LCI < true_treat0) & (ATEests_1_2_G_se_treat0_UCI > true_treat0))
+ATEests_1_2_G_cov_treat1 <- mean((ATEests_1_2_G_se_treat1_LCI < true_treat1) & (ATEests_1_2_G_se_treat1_UCI > true_treat1))
+ATEests_1_2_G_cov_treat10 <- mean((ATEests_1_2_G_se_treat10_LCI < true_treat01) & (ATEests_1_2_G_se_treat10_UCI > true_treat01))
+
+
+# Mean and sd of estimates and standard errors
+mean_ATEests_1_2_G_est_treat0 <- mean(ATEests_1_2_G_est_treat0)
+mean_ATEests_1_2_G_est_treat1 <- mean(ATEests_1_2_G_est_treat1)
+mean_ATEests_1_2_G_est_treat10 <- mean(ATEests_1_2_G_est_treat10)
+
+sd_ATEests_1_2_G_est_treat0 <- sd(ATEests_1_2_G_est_treat0)
+sd_ATEests_1_2_G_est_treat1 <- sd(ATEests_1_2_G_est_treat1)
+sd_ATEests_1_2_G_est_treat10 <- sd(ATEests_1_2_G_est_treat10)
+
+
+mean_ATEests_1_2_G_se_treat0 <- mean(ATEests_1_2_G_se_treat0)
+mean_ATEests_1_2_G_se_treat1 <- mean(ATEests_1_2_G_se_treat1)
+mean_ATEests_1_2_G_se_treat10 <- mean(ATEests_1_2_G_se_treat10)
+```
+
+
+
+```{r}
+data.frame("MeanEst" = c(mean_ATEests_1_2_G_est_treat0, mean_ATEests_1_2_G_est_treat1, mean_ATEests_1_2_G_est_treat10),
+           "SD" = c(sd_ATEests_1_2_G_est_treat0, sd_ATEests_1_2_G_est_treat1, sd_ATEests_1_2_G_est_treat10),
+           "MeanSE" = c(mean_ATEests_1_2_G_se_treat0, mean_ATEests_1_2_G_se_treat1, mean_ATEests_1_2_G_se_treat10),
+           "Coverage" = c(ATEests_1_2_G_cov_treat0, ATEests_1_2_G_cov_treat1, ATEests_1_2_G_cov_treat10),
+           row.names = c("treat0", "treat1", "treat:1-0"))
+```
+
+
+
+```{r}
+# Estimates
+ATEests_1_2_DR_est_treat0 <- sim_ests$ATEests_1_2_DR_est_treat0
+ATEests_1_2_DR_est_treat1 <- sim_ests$ATEests_1_2_DR_est_treat1
+ATEests_1_2_DR_est_treat10 <- sim_ests$`ATEests_1_2_DR_est_treat:1-0`
+
+
+# Standard errors
+ATEests_1_2_DR_se_treat0 <- sim_ests$ATEests_1_2_DR_se_treat0
+ATEests_1_2_DR_se_treat1 <- sim_ests$ATEests_1_2_DR_se_treat1
+ATEests_1_2_DR_se_treat10 <- sim_ests$`ATEests_1_2_DR_se_treat:1-0`
+
+
+# Cofidence intervals
+ATEests_1_2_DR_se_treat0_LCI <- ATEests_1_2_DR_est_treat0 - 1.96 * ATEests_1_2_DR_se_treat0
+ATEests_1_2_DR_se_treat0_UCI <- ATEests_1_2_DR_est_treat0 + 1.96 * ATEests_1_2_DR_se_treat0
+
+ATEests_1_2_DR_se_treat1_LCI <- ATEests_1_2_DR_est_treat1 - 1.96 * ATEests_1_2_DR_se_treat1
+ATEests_1_2_DR_se_treat1_UCI <- ATEests_1_2_DR_est_treat1 + 1.96 * ATEests_1_2_DR_se_treat1
+
+ATEests_1_2_DR_se_treat10_LCI <- ATEests_1_2_DR_est_treat10 - 1.96 * ATEests_1_2_DR_se_treat10
+ATEests_1_2_DR_se_treat10_UCI <- ATEests_1_2_DR_est_treat10 + 1.96 * ATEests_1_2_DR_se_treat10
+
+
+
+# Coverage
+ATEests_1_2_DR_cov_treat0 <- mean((ATEests_1_2_DR_se_treat0_LCI < true_treat0) & (ATEests_1_2_DR_se_treat0_UCI > true_treat0))
+ATEests_1_2_DR_cov_treat1 <- mean((ATEests_1_2_DR_se_treat1_LCI < true_treat1) & (ATEests_1_2_DR_se_treat1_UCI > true_treat1))
+ATEests_1_2_DR_cov_treat10 <- mean((ATEests_1_2_DR_se_treat10_LCI < true_treat01) & (ATEests_1_2_DR_se_treat10_UCI > true_treat01))
+
+
+# Mean and sd of estimates and standard errors
+mean_ATEests_1_2_DR_est_treat0 <- mean(ATEests_1_2_DR_est_treat0)
+mean_ATEests_1_2_DR_est_treat1 <- mean(ATEests_1_2_DR_est_treat1)
+mean_ATEests_1_2_DR_est_treat10 <- mean(ATEests_1_2_DR_est_treat10)
+
+sd_ATEests_1_2_DR_est_treat0 <- sd(ATEests_1_2_DR_est_treat0)
+sd_ATEests_1_2_DR_est_treat1 <- sd(ATEests_1_2_DR_est_treat1)
+sd_ATEests_1_2_DR_est_treat10 <- sd(ATEests_1_2_DR_est_treat10)
+
+
+mean_ATEests_1_2_DR_se_treat0 <- mean(ATEests_1_2_DR_se_treat0)
+mean_ATEests_1_2_DR_se_treat1 <- mean(ATEests_1_2_DR_se_treat1)
+mean_ATEests_1_2_DR_se_treat10 <- mean(ATEests_1_2_DR_se_treat10)
+```
+
+
+
+```{r}
+data.frame("MeanEst" = c(mean_ATEests_1_2_DR_est_treat0, mean_ATEests_1_2_DR_est_treat1, mean_ATEests_1_2_DR_est_treat10),
+           "SD" = c(sd_ATEests_1_2_DR_est_treat0, sd_ATEests_1_2_DR_est_treat1, sd_ATEests_1_2_DR_est_treat10),
+           "MeanSE" = c(mean_ATEests_1_2_DR_se_treat0, mean_ATEests_1_2_DR_se_treat1, mean_ATEests_1_2_DR_se_treat10),
+           "Coverage" = c(ATEests_1_2_DR_cov_treat0, ATEests_1_2_DR_cov_treat1, ATEests_1_2_DR_cov_treat10),
+           row.names = c("treat0", "treat1", "treat:1-0"))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+# Estimates
+ATEests_2_1_G_est_treat0 <- sim_ests$ATEests_2_1_G_est_treat0
+ATEests_2_1_G_est_treat1 <- sim_ests$ATEests_2_1_G_est_treat1
+ATEests_2_1_G_est_treat10 <- sim_ests$`ATEests_2_1_G_est_treat:1-0`
+
+
+# Standard errors
+ATEests_2_1_G_se_treat0 <- sim_ests$ATEests_2_1_G_se_treat0
+ATEests_2_1_G_se_treat1 <- sim_ests$ATEests_2_1_G_se_treat1
+ATEests_2_1_G_se_treat10 <- sim_ests$`ATEests_2_1_G_se_treat:1-0`
+
+
+# Cofidence intervals
+ATEests_2_1_G_se_treat0_LCI <- ATEests_2_1_G_est_treat0 - 1.96 * ATEests_2_1_G_se_treat0
+ATEests_2_1_G_se_treat0_UCI <- ATEests_2_1_G_est_treat0 + 1.96 * ATEests_2_1_G_se_treat0
+
+ATEests_2_1_G_se_treat1_LCI <- ATEests_2_1_G_est_treat1 - 1.96 * ATEests_2_1_G_se_treat1
+ATEests_2_1_G_se_treat1_UCI <- ATEests_2_1_G_est_treat1 + 1.96 * ATEests_2_1_G_se_treat1
+
+ATEests_2_1_G_se_treat10_LCI <- ATEests_2_1_G_est_treat10 - 1.96 * ATEests_2_1_G_se_treat10
+ATEests_2_1_G_se_treat10_UCI <- ATEests_2_1_G_est_treat10 + 1.96 * ATEests_2_1_G_se_treat10
+
+
+
+# Coverage
+ATEests_2_1_G_cov_treat0 <- mean((ATEests_2_1_G_se_treat0_LCI < true_treat0) & (ATEests_2_1_G_se_treat0_UCI > true_treat0))
+ATEests_2_1_G_cov_treat1 <- mean((ATEests_2_1_G_se_treat1_LCI < true_treat1) & (ATEests_2_1_G_se_treat1_UCI > true_treat1))
+ATEests_2_1_G_cov_treat10 <- mean((ATEests_2_1_G_se_treat10_LCI < true_treat01) & (ATEests_2_1_G_se_treat10_UCI > true_treat01))
+
+
+# Mean and sd of estimates and standard errors
+mean_ATEests_2_1_G_est_treat0 <- mean(ATEests_2_1_G_est_treat0)
+mean_ATEests_2_1_G_est_treat1 <- mean(ATEests_2_1_G_est_treat1)
+mean_ATEests_2_1_G_est_treat10 <- mean(ATEests_2_1_G_est_treat10)
+
+sd_ATEests_2_1_G_est_treat0 <- sd(ATEests_2_1_G_est_treat0)
+sd_ATEests_2_1_G_est_treat1 <- sd(ATEests_2_1_G_est_treat1)
+sd_ATEests_2_1_G_est_treat10 <- sd(ATEests_2_1_G_est_treat10)
+
+
+mean_ATEests_2_1_G_se_treat0 <- mean(ATEests_2_1_G_se_treat0)
+mean_ATEests_2_1_G_se_treat1 <- mean(ATEests_2_1_G_se_treat1)
+mean_ATEests_2_1_G_se_treat10 <- mean(ATEests_2_1_G_se_treat10)
+```
+
+
+
+```{r}
+data.frame("MeanEst" = c(mean_ATEests_2_1_G_est_treat0, mean_ATEests_2_1_G_est_treat1, mean_ATEests_2_1_G_est_treat10),
+           "SD" = c(sd_ATEests_2_1_G_est_treat0, sd_ATEests_2_1_G_est_treat1, sd_ATEests_2_1_G_est_treat10),
+           "MeanSE" = c(mean_ATEests_2_1_G_se_treat0, mean_ATEests_2_1_G_se_treat1, mean_ATEests_2_1_G_se_treat10),
+           "Coverage" = c(ATEests_2_1_G_cov_treat0, ATEests_2_1_G_cov_treat1, ATEests_2_1_G_cov_treat10),
+           row.names = c("treat0", "treat1", "treat:1-0"))
+```
+
+
+
+
+
+```{r}
+# Estimates
+ATEests_2_2_G_est_treat0 <- sim_ests$ATEests_2_2_G_est_treat0
+ATEests_2_2_G_est_treat1 <- sim_ests$ATEests_2_2_G_est_treat1
+ATEests_2_2_G_est_treat10 <- sim_ests$`ATEests_2_2_G_est_treat:1-0`
+
+
+# Standard errors
+ATEests_2_2_G_se_treat0 <- sim_ests$ATEests_2_2_G_se_treat0
+ATEests_2_2_G_se_treat1 <- sim_ests$ATEests_2_2_G_se_treat1
+ATEests_2_2_G_se_treat10 <- sim_ests$`ATEests_2_2_G_se_treat:1-0`
+
+
+# Cofidence intervals
+ATEests_2_2_G_se_treat0_LCI <- ATEests_2_2_G_est_treat0 - 1.96 * ATEests_2_2_G_se_treat0
+ATEests_2_2_G_se_treat0_UCI <- ATEests_2_2_G_est_treat0 + 1.96 * ATEests_2_2_G_se_treat0
+
+ATEests_2_2_G_se_treat1_LCI <- ATEests_2_2_G_est_treat1 - 1.96 * ATEests_2_2_G_se_treat1
+ATEests_2_2_G_se_treat1_UCI <- ATEests_2_2_G_est_treat1 + 1.96 * ATEests_2_2_G_se_treat1
+
+ATEests_2_2_G_se_treat10_LCI <- ATEests_2_2_G_est_treat10 - 1.96 * ATEests_2_2_G_se_treat10
+ATEests_2_2_G_se_treat10_UCI <- ATEests_2_2_G_est_treat10 + 1.96 * ATEests_2_2_G_se_treat10
+
+
+
+# Coverage
+ATEests_2_2_G_cov_treat0 <- mean((ATEests_2_2_G_se_treat0_LCI < true_treat0) & (ATEests_2_2_G_se_treat0_UCI > true_treat0))
+ATEests_2_2_G_cov_treat1 <- mean((ATEests_2_2_G_se_treat1_LCI < true_treat1) & (ATEests_2_2_G_se_treat1_UCI > true_treat1))
+ATEests_2_2_G_cov_treat10 <- mean((ATEests_2_2_G_se_treat10_LCI < true_treat01) & (ATEests_2_2_G_se_treat10_UCI > true_treat01))
+
+
+# Mean and sd of estimates and standard errors
+mean_ATEests_2_2_G_est_treat0 <- mean(ATEests_2_2_G_est_treat0)
+mean_ATEests_2_2_G_est_treat1 <- mean(ATEests_2_2_G_est_treat1)
+mean_ATEests_2_2_G_est_treat10 <- mean(ATEests_2_2_G_est_treat10)
+
+sd_ATEests_2_2_G_est_treat0 <- sd(ATEests_2_2_G_est_treat0)
+sd_ATEests_2_2_G_est_treat1 <- sd(ATEests_2_2_G_est_treat1)
+sd_ATEests_2_2_G_est_treat10 <- sd(ATEests_2_2_G_est_treat10)
+
+
+mean_ATEests_2_2_G_se_treat0 <- mean(ATEests_2_2_G_se_treat0)
+mean_ATEests_2_2_G_se_treat1 <- mean(ATEests_2_2_G_se_treat1)
+mean_ATEests_2_2_G_se_treat10 <- mean(ATEests_2_2_G_se_treat10)
+```
+
+
+
+```{r}
+data.frame("MeanEst" = c(mean_ATEests_2_2_G_est_treat0, mean_ATEests_2_2_G_est_treat1, mean_ATEests_2_2_G_est_treat10),
+           "SD" = c(sd_ATEests_2_2_G_est_treat0, sd_ATEests_2_2_G_est_treat1, sd_ATEests_2_2_G_est_treat10),
+           "MeanSE" = c(mean_ATEests_2_2_G_se_treat0, mean_ATEests_2_2_G_se_treat1, mean_ATEests_2_2_G_se_treat10),
+           "Coverage" = c(ATEests_2_2_G_cov_treat0, ATEests_2_2_G_cov_treat1, ATEests_2_2_G_cov_treat10),
+           row.names = c("treat0", "treat1", "treat:1-0"))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
