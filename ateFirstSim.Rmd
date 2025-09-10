@@ -124,7 +124,7 @@ true_treat01 <- summary_df$mean[9]
 We then run the runone simulation function multiple times and store the results in a list which is then flattened to a data frame using the flatten_sims function from the helperfuncs.R script.
 
 ```{r}
-n_sim <- 10
+n_sim <- 2000
 estimates <- replicate(n_sim, 
                        runone(n = 800, 
                               seed = NA, 
@@ -167,6 +167,7 @@ res_ate$summary
 coef_truths <- c(Intercept = -1, Z21 = 0.3, Z31 = -0.3)
 res_coef <- summarize_sim_coefs(sim_ests, truths = coef_truths)
 res_coef$summary
+#write.csv(res_coef$summary, file = "rescoefsummary2000.csv", row.names = TRUE)
 ```
 
 

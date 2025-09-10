@@ -172,6 +172,7 @@ runone <- function(n = 800,
                    varZ_corr = 1, 
                    varZ_corr_cens = 1, 
                    rcZ = 1,
+                   trZ = 1,
                    specs = list(
                      Z1 = list(dist = rbinom, size = 1, prob = 0.5), 
                      Z2 = list(dist = rbinom, size = 1, prob = 0.5)),
@@ -180,6 +181,7 @@ runone <- function(n = 800,
                    beta = c(1, 0.3, -0.3, 1, -0.3, 0.3), 
                    rc = 0.5, 
                    depcens = 1, 
+                   deptreat = 1,
                    sim_type = "cloglog"){
   
   #browser()
@@ -223,15 +225,15 @@ runone <- function(n = 800,
     
   } else {
     # Simulate outcomes using corr.simul.cifs
-    sims <- corr.simul.cifs(n_clusters = n_clusters,
-                            rho1 = rho1,
+    sims <- corr.simul.cifs(rho1 = rho1,
                             rho2 = rho2,
                             beta = beta,
                             rc = rc,
                             depcens = depcens,
+                            deptreat = deptreat,
                             rcZ = rcZ,
+                            trZ = trZ,
                             type = sim_type,
-                            cluster_size = cluster_size,
                             Z = Z)
     
     dats <- sims$dats
